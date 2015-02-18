@@ -5,12 +5,12 @@ use warnings;
 
 my $_debug = 0;
 
-#use Data::Dumper;
+use Data::Dumper;
 
 my $inputSam = shift;
 my $outputMut = shift;
-my $refSeq = "/home/qczhang/database/ensembl/current/mouse/gtf/transcriptome.fa";
-my $icSHAPE = "/home/qczhang/shape-seq/new/analysis/all.polya/LIB_NAI-LIB_DMSO.PolyA.invitro.valid.enrich";
+my $fasta = shift;
+my $icSHAPE = shift;
 
 my %seq = (); 
 my %seq_icSHAPE = ();
@@ -18,7 +18,7 @@ my %seq_mut = ();
 my %seqMut_stat = (); 
 my %allMut_stat = ();
 
-&main ( $inputSam, $outputMut, icSHAPE => $icSHAPE, refSeq => $refSeq );
+&main ( $inputSam, $outputMut, icSHAPE => $icSHAPE, fasta => $fasta );
 
 sub main
 {
@@ -28,12 +28,11 @@ sub main
     my $mutFile = shift;
     my %parameters = @_;
 
-    &readFasta ( $parameters{refSeq}, simple => 1 );
+    &readFasta ( $parameters{fasta}, simple => 1 );
     &readIcSHAPE ( $parameters{icSHAPE}, );
 
     my @samFiles = split ( /:/, $samFileList );
     foreach my $samFile ( @samFiles ) { &readSam ( $samFile ); }
-    print Dumper \%seq_mut;
     exit;
 
     &mutStatistics ( lowCut => 0.05, highCut => 0.4 );
@@ -45,8 +44,8 @@ sub init
 {
     if ( not $inputSam ) { die "Usage: $0 input_sam output_stat fasta shape\n"; }
     if ( ( not defined $outputMut ) or ( $outputMut eq "NULL" ) ) {  $outputMut = "output.stat";  }
-    if ( ( not defined $refSeq ) or ( $refSeq eq "NULL" ) ) { $refSeq = "/home/qczhang/database/ensembl/current/mouse/gtf/transcriptome.fa"; }
-    if ( ( not defined $icSHAPE ) or ( $refSeq eq "NULL" ) ) { $icSHAPE = "/home/qczhang/shape-seq/new/analysis/all.polya/LIB_NAI-LIB_DMSO.PolyA.invitro.valid.enrich"; }
+    if ( ( not defined $fasta ) or ( $fasta eq "NULL" ) ) { $fasta = "/home/qczhang/database/ensembl/current/mouse/gtf/transcriptome.fa"; }
+    if ( ( not defined $icSHAPE ) or ( $icSHAPE eq "NULL" ) ) { $icSHAPE = "/home/qczhang/shape-seq/new/analysis/all.polya/LIB_NAI-LIB_DMSO.PolyA.invitro.valid.enrich"; }
 }
 
 sub readSam
@@ -65,7 +64,8 @@ sub readSam
             my @data = split ( /\t/, $line );
             my $tag = $data[1];
             if ( ( not $tag ) or ( $tag == 99 ) ) { ## so far we only use read1
-                my $mdString = ""; for ( my $idx = 11; $idx < scalar ( @data ); $idx++ ) { if ( $data[$idx] =~ /MD:/ ) { $mdString = substr ( $data[$idx], 5 ); last; } }
+                my $mdString = ""; 
+                for ( my $idx = 11; $idx < scalar ( @data ); $idx++ ) { if ( $data[$idx] =~ /MD:/ ) { $mdString = substr ( $data[$idx], 5 ); last; } }
                 &parseMut ( $data[2], $data[3], $data[5], $data[9], $mdString );
             }
             elsif ( ( $tag == 99 ) or ( $tag == 147 ) )  {
@@ -95,12 +95,146 @@ sub parseMut
     my ( $ref_match, $ref_matchSize ) = _parseCigar ( $cigar );
     my ( $ref_op, $ref_opSize ) = _parseMD ( $md );
 
-    my ( $headSoftClip, $ref_insertions, $ref_insertionSize ) = collectAlignInfoCIGAR ( );
-    collectAlignInfoMD ( );
+    my ( $headSoftClip, $ref_insertions, $ref_insertionSize ) = collectAlignInfoCIGAR ( $seqID, $pos, $cigar, $readSeq, $ref_match, $ref_matchSize );
+    collectAlignInfoMD ( $seqID, $pos, $readSeq, $headSoftClip, $ref_op, $ref_opSize, $ref_insertions, $ref_insertionSize );
+    print Dumper \%seq_mut;
 
     1;
 }
 
+sub collectAlignInfoCIGAR
+{
+    my $seqID = shift; my $pos = shift; my $cigar = shift; my $readSeq = shift;
+    my $ref_match = shift; my $ref_matchSize = shift;
+
+    my $refPos = $pos - 1;      ## read alignment position ( pos ) is 1-indexed, but refPos is 0-indexed
+    my $readPos = 0;            ## read position is 0-indexed on read ( column 10 )
+    my $headSoftClip = 0;       ## whether the leading is softclipped
+    my @insertions = (); my @insertionSize = ();
+    for ( my $idx = 0; $idx < scalar ( @{$ref_match} ); $idx++ ) {
+        if ( $ref_match->[$idx] eq "S" )  { 
+            if ( $idx == 0 ) { 
+                $seq_mut{$seqID}{"sclip"}[$refPos] = _append ( $seq_mut{$seqID}{"sclip"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) . "-" );
+                $headSoftClip = $ref_matchSize->[$idx];
+            }
+            elsif ( $idx == scalar( @{$ref_match} -1 ) ) { 
+                $seq_mut{$seqID}{"sclip"}[$refPos] = _append ( $seq_mut{$seqID}{"sclip"}[$refPos], "-" . substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) );
+            }
+            else { print STDERR "Warning! clipping inside an alignment!\n"; print STDERR "\t$cigar\t$readSeq\n"; }
+            $readPos += $ref_matchSize->[$idx];
+        }
+        if ( $ref_match->[$idx] eq "H" )  { 
+            if ( $idx == 0 ) { $seq_mut{$seqID}{"hclip"}[$refPos] = _append ( $seq_mut{$seqID}{"hclip"}[$refPos], "csna-" ); }
+            elsif ( $idx == scalar( @{$ref_match} -1 ) ) { $seq_mut{$seqID}{"hclip"}[$refPos] = _append ( $seq_mut{$seqID}{"hclip"}[$refPos], "-csna" ); }
+            else { print STDERR "Warning! clipping inside an alignment!\n"; print STDERR "\t$cigar\t$readSeq\n"; }
+        }
+        elsif ( $ref_match->[$idx] eq "I" ) {
+            $seq_mut{$seqID}{"insertion"}[$refPos] = _append ( $seq_mut{$seqID}{"insertion"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) );
+            $readPos += $ref_matchSize->[$idx];
+            push ( @insertions, $refPos );
+            push ( @insertionSize, $ref_matchSize->[$idx] );
+        }
+        elsif ( $ref_match->[$idx] eq "P" ) { }
+        elsif ( $ref_match->[$idx] eq "D" ) {
+            $refPos += $ref_matchSize->[$idx];     
+            # $seq_mut{$seqID}{"deletion"}[$refPos] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos], $ref_matchSize->[$idx] ); # subject to realignment
+        }
+        elsif ( $ref_match->[$idx] eq "X" ) {
+            $seq_mut{$seqID}{"mismatch"}[$refPos] = _append ( $seq_mut{$seqID}{"mismatch"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) ); 
+            ## not tested
+            $refPos += $ref_matchSize->[$idx];     
+            $readPos += $ref_matchSize->[$idx];
+        }
+        elsif ( ( $ref_match->[$idx] eq "=" ) or ( $ref_match->[$idx] eq "M" ) ) {
+            $refPos += $ref_matchSize->[$idx];     
+            $readPos += $ref_matchSize->[$idx];
+        }
+    }
+
+    return ( $headSoftClip, \@insertions, \@insertionSize );
+}
+
+sub collectAlignInfoMD
+{
+    my $seqID = shift; my $pos = shift; my $readSeq = shift; my $headSoftClip = shift;
+    my $ref_op = shift; my $ref_opSize = shift;
+    my $ref_insertions = shift; my $ref_insertionSize = shift;
+
+    my $refPos = $pos - 1;               ## point to 0-base index 
+    my $readPos = $headSoftClip;         ## the same
+
+    if ( $ref_op->[0] ) {
+        if ( $ref_op->[0] =~ /^\^/ ) {
+            my $delLen = length ( $ref_op->[0] ) - 1;
+            for ( my $idxPos = 0; $idxPos < $delLen-1; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; }
+            $refPos += $delLen;
+            if ( ( defined $ref_op->[1] ) and ( not defined $ref_opSize->[1] ) ) { print STDERR "error!\n"; return -1; }
+            if ( ( defined $ref_op->[1] ) and ( $ref_op->[1] ) and ( not $ref_opSize->[0] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            else {
+                my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[0] );
+                print "multiple matching? - $matchInLocal\n" if ( $_debug );
+                if ( $matchInLocal == 1 ) {
+                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
+                    $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[0] );
+                    ## you want to label the deletion even at the last base of deleted fragment
+                }
+                else { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            }
+        }
+        elsif ( $ref_op->[0] =~ /[A-Z]/ ) {
+            $refPos++; $readPos++;
+            if ( ( defined $ref_op->[1] ) and ( not defined $ref_opSize->[1] ) ) { print STDERR "error!\n"; return -1; }
+            if ( ( defined $ref_op->[1] ) and ( $ref_op->[1] ) and ( not $ref_opSize->[1] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
+            else { $seq_mut{$seqID}{"mutation"}[$refPos-1] = _append ( $seq_mut{$seqID}{"mutation"}[$refPos-1], substr ( $readSeq, $readPos-1, 1 ) ); }
+        }
+
+        $ref_op->[0] = "";
+        shift @{$ref_opSize};
+    }
+
+    for ( my $idx = 0; $idx <= scalar ( @{$ref_op} ); $idx++ ) {
+        if ( ( not defined $ref_op->[$idx] ) or ( not $ref_op->[$idx] ) ) {
+        }
+        elsif ( $ref_op->[$idx] =~ /^\^/ ) {
+            my $delLen = length ( $ref_op->[$idx] ) - 1;
+            for ( my $idxPos = 0; $idxPos < $delLen-1; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; } #deletion only record at the last position
+            $refPos += $delLen;
+            if ( ( defined $ref_op->[$idx+1] ) and ( $ref_op->[$idx+1] ) and ( not $ref_opSize->[$idx] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
+            else {
+                my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[$idx] );
+                print "multiple matching? - $matchInLocal\n" if ( $_debug );
+                if ( $matchInLocal == 1 ) {
+                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
+                    $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[$idx] );
+                    ## you want to label the deletion even at the last base of deleted fragment
+                }
+                else { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            }
+        }
+        elsif ( $ref_op->[$idx] =~ /[A-Z]/ ) {
+            $refPos++; $readPos++;
+            if ( ( defined $ref_op->[$idx+1] ) and ( $ref_op->[$idx+1] ) and ( not $ref_opSize->[$idx] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
+            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
+            else { $seq_mut{$seqID}{"mutation"}[$refPos-1] = _append ( $seq_mut{$seqID}{"mutation"}[$refPos-1], substr ( $readSeq, $readPos-1, 1 ) ); }
+        }
+
+        if ( $ref_opSize->[$idx] ) {
+            for ( my $idxPos = 0; $idxPos < $ref_opSize->[$idx]; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; }
+            $refPos += $ref_opSize->[$idx];
+            $readPos += $ref_opSize->[$idx];
+
+            while ( ( scalar (@{$ref_insertions} ) ) and ( $refPos >= $ref_insertions->[0] ) )  {
+                $readPos += $ref_insertionSize->[0];
+                shift ( @{$ref_insertions} );
+                shift ( @{$ref_insertionSize} );
+            }
+        }
+    }
+
+    1;
+}
 sub _parseMut2
 {
 }
@@ -374,7 +508,6 @@ sub outputMutStat
 sub readIcSHAPE
 {
     my $icSHAPE = shift;
-    my $ref_icSHAPE = shift;
     my %parameters = @_;
 
     my $count = 0;
@@ -385,7 +518,7 @@ sub readIcSHAPE
         chomp $line;
 
         my ( $id, $length, $rpkm, @scores ) = split ( /\t/, $line );
-        $ref_icSHAPE->{$id} = \@scores;
+        $seq_icSHAPE{$id} = \@scores;
     }
     close SH;
 
@@ -395,7 +528,6 @@ sub readIcSHAPE
 sub readFasta
 {
     my $fasta = shift;
-    my $ref_seq = shift;
     my %parameters = @_;
 
     my $count = 0;
@@ -410,7 +542,7 @@ sub readFasta
 
             $line = <FA>;
             chomp $line;
-            $ref_seq->{$id} = $line;
+            $seq{$id} = $line;
         }
     }
     close FA;
@@ -486,7 +618,8 @@ sub _parseCigar
 
     if ( $parameters{getLargestM} ) {
         my $largestM = 0;
-        for ( my $idx = 0; $idx < scalar ( @match ); $idx++ ) { if ( $match[$idx] eq "M" ) { if ( $matchSize[$idx] > $largestM ) { $largestM = $matchSize[$idx]; } } }
+        for ( my $idx = 0; $idx < scalar ( @match ); $idx++ ) 
+            { if ( $match[$idx] eq "M" ) { if ( $matchSize[$idx] > $largestM ) { $largestM = $matchSize[$idx]; } } }
 
         return $largestM;
     }
@@ -513,150 +646,3 @@ sub _printArray
     1;
 }
 
-sub collectAlignInfoCIGAR
-{
-    my $seqID = shift;
-    my $pos = shift;
-    my $ref_match = shift;
-    my $ref_matchSize = shift;
-    my $readSeq = shift;
-    my $cigar = shift;
-
-    my $refPos = $pos - 1;      ## read alignment position ( pos ) is 1-indexed, but refPos is 0-indexed
-    my $readPos = 0;            ## read position is 0-indexed on read ( column 10 )
-    my $headSoftClip = 0;       ## whether the leading is softclipped
-    my @insertions = (); my @insertionSize = ();
-    for ( my $idx = 0; $idx < scalar ( @{$ref_match} ); $idx++ ) {
-        if ( $ref_match->[$idx] eq "S" )  { 
-            if ( $idx == 0 ) { 
-                $seq_mut{$seqID}{"sclip"}[$refPos] = _append ( $seq_mut{$seqID}{"sclip"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) . "-" );
-                $headSoftClip = $ref_matchSize->[$idx];
-            }
-            elsif ( $idx == scalar( @{$ref_match} -1 ) ) { 
-                $seq_mut{$seqID}{"sclip"}[$refPos] = _append ( $seq_mut{$seqID}{"sclip"}[$refPos], "-" . substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) );
-            }
-            else { print STDERR "Warning! clipping inside an alignment!\n"; print STDERR "\t$cigar\t$readSeq\n"; }
-            $readPos += $ref_matchSize->[$idx];
-        }
-        if ( $ref_match->[$idx] eq "H" )  { 
-            if ( $idx == 0 ) { $seq_mut{$seqID}{"hclip"}[$refPos] = _append ( $seq_mut{$seqID}{"hclip"}[$refPos], "csna-" ); }
-            elsif ( $idx == scalar( @{$ref_match} -1 ) ) { $seq_mut{$seqID}{"hclip"}[$refPos] = _append ( $seq_mut{$seqID}{"hclip"}[$refPos], "-csna" ); }
-            else { print STDERR "Warning! clipping inside an alignment!\n"; print STDERR "\t$cigar\t$readSeq\n"; }
-        }
-        elsif ( $ref_match->[$idx] eq "I" ) {
-            $seq_mut{$seqID}{"insertion"}[$refPos] = _append ( $seq_mut{$seqID}{"insertion"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) );
-            $readPos += $ref_matchSize->[$idx];
-            push ( @insertions, $refPos+1 );
-            push ( @insertionSize, $ref_matchSize->[$idx] );
-        }
-        elsif ( $ref_match->[$idx] eq "P" ) { }
-        elsif ( $ref_match->[$idx] eq "D" ) {
-            $refPos += $ref_matchSize->[$idx];     
-            # $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_matchSize->[$idx] ); # subject to realignment
-        }
-        elsif ( $ref_match->[$idx] eq "X" ) {
-            $seq_mut{$seqID}{"mismatch"}[$refPos] = _append ( $seq_mut{$seqID}{"mismatch"}[$refPos], substr ( $readSeq, $readPos, $ref_matchSize->[$idx] ) ); ## not tested
-            $refPos += $ref_matchSize->[$idx];     
-            $readPos += $ref_matchSize->[$idx];
-        }
-        elsif ( ( $ref_match->[$idx] eq "=" ) or ( $ref_match->[$idx] eq "M" ) ) {
-            $refPos += $ref_matchSize->[$idx];     
-            $readPos += $ref_matchSize->[$idx];
-        }
-    }
-
-    return ( $headSoftClip, \@insertions, \@insertionSize );
-}
-
-sub collectAlignInfoMD
-{
-    my $seqID = shift;
-    my $pos = shift;
-    my $headSoftClip = shift;
-    my $ref_op = shift;
-    my $ref_opSize = shift;
-    my $readSeq = shift;
-    my $ref_insertions = shift;
-    my $ref_insertionSize = shift;
-
-    my $refPos = $pos - 1;               ## point to 0-base index 
-    my $readPos = $headSoftClip;         ## the same
-
-    if ( $ref_op->[0] ) {
-        if ( $ref_op->[0] =~ /^\^/ ) {
-            ## removal of ambiguity
-            my $delLen = length ( $ref_op->[0] ) - 1;
-            for ( my $idxPos = 0; $idxPos < $delLen-1; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; }
-            $refPos += $delLen;
-            if ( ( defined $ref_op->[1] ) and ( not defined $ref_opSize->[1] ) ) { print STDERR "error!\n"; return -1; }
-
-            if ( ( defined $ref_op->[1] ) and ( $ref_op->[1] ) and ( not $ref_opSize->[0] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            else {
-                my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[0] );
-                print "multiple matching? - $matchInLocal\n" if ( $_debug );
-                if ( $matchInLocal == 1 ) {
-                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
-                    $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[0] );
-                    ## you want to label the deletion even at the last base of deleted fragment
-                }
-                else { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            }
-        }
-        elsif ( $ref_op->[0] =~ /[A-Z]/ ) {
-            $refPos++; $readPos++;
-            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
-            if ( ( defined $ref_op->[1] ) and ( not defined $ref_opSize->[1] ) ) { print STDERR "error!\n"; return -1; }
-
-            if ( ( defined $ref_op->[1] ) and ( $ref_op->[1] ) and ( not $ref_opSize->[1] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            else { $seq_mut{$seqID}{"mutation"}[$refPos-1] = _append ( $seq_mut{$seqID}{"mutation"}[$refPos-1], substr ( $readSeq, $readPos, 1 ) ); }
-        }
-
-        $ref_op->[0] = "";
-        shift @{$ref_opSize};
-    }
-
-    for ( my $idx = 0; $idx <= scalar ( @{$ref_op} ); $idx++ ) {
-        ## make sure the order is not affected by the real operation strings!!!!!!
-        if ( ( not defined $ref_op->[$idx] ) or ( not $ref_op->[$idx] ) ) {
-        }
-        elsif ( $ref_op->[$idx] =~ /^\^/ ) {
-            ## removal of ambiguity
-            my $delLen = length ( $ref_op->[$idx] ) - 1;
-            for ( my $idxPos = 0; $idxPos < $delLen-1; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; }
-            $refPos += $delLen;
-            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
-            if ( ( defined $ref_op->[$idx+1] ) and ( $ref_op->[$idx+1] ) and ( not $ref_opSize->[$idx] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            else {
-                my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[$idx] );
-                print "multiple matching? - $matchInLocal\n" if ( $_debug );
-                if ( $matchInLocal == 1 ) {
-                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
-                    $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[$idx] );
-                    ## you want to label the deletion even at the last base of deleted fragment
-                }
-                else { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            }
-        }
-        elsif ( $ref_op->[$idx] =~ /[A-Z]/ ) {
-            $refPos++; $readPos++;
-            ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
-            if ( ( defined $ref_op->[$idx+1] ) and ( $ref_op->[$idx+1] ) and ( not $ref_opSize->[$idx] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
-            else { $seq_mut{$seqID}{"mutation"}[$refPos-1] = _append ( $seq_mut{$seqID}{"mutation"}[$refPos-1], substr ( $readSeq, $readPos, 1 ) ); }
-        }
-
-        if ( $ref_opSize->[$idx] ) {
-            for ( my $idxPos = 0; $idxPos < $ref_opSize->[$idx]; $idxPos++ ) { $seq_mut{$seqID}{"same"}[$refPos+$idxPos]++; }
-
-            $refPos += $ref_opSize->[$idx];
-            $readPos += $ref_opSize->[$idx];
-
-            while ( ( scalar (@{$ref_insertions} ) ) and ( $refPos >= $ref_insertions->[0] ) )  {
-                $readPos += $ref_insertionSize->[0];
-                shift ( @{$ref_insertions} );
-                shift ( @{$ref_insertionSize} );
-            }
-        }
-    }
-
-    1;
-}
