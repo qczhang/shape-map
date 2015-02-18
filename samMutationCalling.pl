@@ -9,6 +9,7 @@ use Data::Dumper;
 
 my $inputSam = shift;
 my $outputMut = shift;
+my $outputStat = shift;
 my $fasta = shift;
 my $icSHAPE = shift;
 
@@ -18,7 +19,7 @@ my %seq_mut = ();
 my %seqMut_stat = (); 
 my %allMut_stat = ();
 
-&main ( $inputSam, $outputMut, icSHAPE => $icSHAPE, fasta => $fasta );
+&main ( $inputSam, $outputMut, $outputStat, icSHAPE => $icSHAPE, fasta => $fasta );
 
 sub main
 {
@@ -26,6 +27,7 @@ sub main
 
     my $samFileList = shift;
     my $mutFile = shift;
+    my $statFile = shift;
     my %parameters = @_;
 
     &readFasta ( $parameters{fasta}, simple => 1 );
@@ -33,13 +35,9 @@ sub main
 
     my @samFiles = split ( /:/, $samFileList );
     foreach my $samFile ( @samFiles ) { &readSam ( $samFile ); }
-    print Dumper \%seq_mut;
 
-    &mutStatistics ( icSHAPE => $icSHAPE, lowCut => 0.05, highCut => 0.4 );
-    print Dumper \%seq_mut;
-    print Dumper \%seqMut_stat;
-
-    &outputMutStat ( $mutFile );
+    &statAndPrint ( $mutFile, icSHAPE => $icSHAPE, lowCut => 0.05, highCut => 0.4 );
+    &outputMutStat ( $statFile, icSHAPE => $icSHAPE );
 }
 
 sub init
@@ -240,37 +238,60 @@ sub _parseMut2
 {
 }
 
-sub mutStatistics
+sub statAndPrint
 {
+    my $outFile = shift;
     my %parameters = @_;
 
-    foreach my $seqID ( keys %seq_mut ) {
+    open ( OUT, ">$outFile" );
+    print OUT "seqID\tindex\tbase\ticSHAPE\tsame\tfreqA\tfreqT\tfreqG\tfreqC\tfreqDel\ttotal\tprobSame\tprobA\tprobT\tprobG\tprobC\tprobDel\n";
+    foreach my $seqID ( sort {$a cmp $b} ( keys %seq_mut ) ) {
         if ( not defined $seq_fasta{$seqID} ) { print STDERR "ERROR! Sequence of $seqID not found. ...skipped\n"; next; }
 
+        print OUT "## -- $seqID --\n";
         my $fasta = uc ( $seq_fasta{$seqID} );
         for ( my $idx = 0; $idx < length ( $fasta ); $idx++ ) {
             my $base = substr ( $fasta, $idx, 1 );
             my $icSHAPE = ( defined $seq_icSHAPE{$seqID} ) ? $seq_icSHAPE{$seqID}[$idx] : "NULL"; 
-            if ( defined $seq_mut{$seqID}{same}[$idx] ) 
-                {  updateSeqMut ( $seqID, $base, $base, $seq_mut{$seqID}{same}[$idx], $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} ); }
-            if ( defined $seq_mut{$seqID}{deletion}[$idx] ) {
-                my $insD = () = $seq_mut{$seqID}{deletion}[$idx] =~ /;/gi; $insD++;
-                updateSeqMut ( $seqID, $base, "deletion", $insD, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
+            print OUT $seqID, "\t", $idx+1, "\t", $base, "\t", $icSHAPE;
+
+            my $total = 0;
+            my $same = 0;
+            if ( defined $seq_mut{$seqID}{same}[$idx] ) {  
+                $same = $seq_mut{$seqID}{same}[$idx];
+                $total += $same;
+                updateSeqMut ( $seqID, $base, $base, $same, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} ); 
             }
+            print OUT "\t", $same;
 
+            my $insA = 0; my $insT = 0; my $insG = 0; my $insC = 0;
             if ( defined $seq_mut{$seqID}{mutation}[$idx] ) {
-                my $insA = () = $seq_mut{$seqID}{mutation}[$idx] =~ /A/gi;
-                my $insT = () = $seq_mut{$seqID}{mutation}[$idx] =~ /T/gi;
-                my $insG = () = $seq_mut{$seqID}{mutation}[$idx] =~ /G/gi;
-                my $insC = () = $seq_mut{$seqID}{mutation}[$idx] =~ /C/gi;
-
+                $insA = () = $seq_mut{$seqID}{mutation}[$idx] =~ /A/gi;
+                $insT = () = $seq_mut{$seqID}{mutation}[$idx] =~ /T/gi;
+                $insG = () = $seq_mut{$seqID}{mutation}[$idx] =~ /G/gi;
+                $insC = () = $seq_mut{$seqID}{mutation}[$idx] =~ /C/gi;
+                $total += $insA + $insT + $insG + $insC;
                 updateSeqMut ( $seqID, $base, "A", $insA, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "T", $insT, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "G", $insG, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "C", $insC, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
             }
+            print OUT "\t", $insA, "\t", $insT, "\t", $insG, "\t", $insC;
+
+            my $insD = 0;
+            if ( defined $seq_mut{$seqID}{deletion}[$idx] ) {
+                $insD = () = $seq_mut{$seqID}{deletion}[$idx] =~ /;/gi; $insD++;
+                $total += $insD;
+                updateSeqMut ( $seqID, $base, "deletion", $insD, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
+            }
+            print OUT "\t", $insD;
+
+            if ( $total ) 
+                {  print OUT "\t$total\t", sprintf ( "%.4f", $same/$total ), "\t", sprintf ( "%.4f", $insA/$total ), "\t", sprintf ( "%.4f", $insT/$total ), "\t", sprintf ( "%.4f", $insG/$total ), "\t", sprintf ( "%.4f", $insC/$total ), "\t", sprintf ( "%.4f", $insD/$total ), "\n"; }
+            else { print OUT "\t$total\t-\t-\t-\t-\t-\t-\n"; }
         }
     }
+    close OUT;
 
     1;
 }
@@ -301,122 +322,58 @@ sub updateSeqMut
     1;
 }
 
+
+sub outputMut 
+{
+    my $outFile = shift;
+    my %parameters = @_;
+
+
+    1;
+}
+
 sub outputMutStat 
 {
     my $outFile = shift;
     my %parameters = @_;
 
-    my $total = 0; my $percentage = 0;
+    my $total = 0; my $percentage = 0; my $printString = "";
     open ( OUT, ">$outFile" );
-    print OUT printHeader ( "allBase" );
+    print OUT printStatHeader ( "allBase" );
     foreach my $base ( "A", "T", "G", "C" ) {
-        print OUT $base;
-        $total = 0;
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{$mut} ) {
-                $total += $allMut_stat{$base}{$mut};
-                print OUT "\t", $allMut_stat{$base}{$mut}; 
-            }
-            else { print OUT "\t0"; }
-        }
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{$mut} ) { 
-                if ( $base eq $mut ) { $percentage = "-" ; }
-                else { $percentage = sprintf ( "%.5f", $allMut_stat{$base}{$mut} / $total ); }
-                print OUT "\t", $percentage; 
-            }
-            else { print OUT "\t0"; }
-        }
-
-        $total = 0;
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{lowCut}{$mut} ) {
-                $total += $allMut_stat{$base}{lowCut}{$mut};
-                print OUT "\t", $allMut_stat{$base}{lowCut}{$mut}; 
-            }
-            else { print OUT "\t0"; }
-        }
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{lowCut}{$mut} ) { 
-                if ( $base eq $mut ) { $percentage = "-" ; }
-                else { $percentage = sprintf ( "%.5f", $allMut_stat{$base}{lowCut}{$mut} / $total ); }
-                print OUT "\t", $percentage; 
-            }
-            else { print OUT "\t0"; }
-        }
-
-        $total = 0;
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{highCut}{$mut} ) {
-                $total += $allMut_stat{$base}{highCut}{$mut};
-                print OUT "\t", $allMut_stat{$base}{highCut}{$mut}; 
-            }
-            else { print OUT "\t0"; }
-        }
-        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-            if ( defined $allMut_stat{$base}{highCut}{$mut} ) { 
-                if ( $base eq $mut ) { $percentage = "-" ; }
-                else { $percentage = sprintf ( "%.5f", $allMut_stat{$base}{highCut}{$mut} / $total ); }
-                print OUT "\t", $percentage; 
-            }
-            else { print OUT "\t0"; }
+        ( $printString, $total ) = printAllCount ( $base );
+        print OUT $base, $printString;
+        $printString = printAllPerc ( $base, $total );
+        print OUT $printString;
+        if ( defined $parameters{icSHAPE} ) {
+            ( $printString, $total ) = printAllCount ( $base, type => "highCut" );
+            print OUT $printString;
+            $printString = printAllPerc ( $base, $total, type => "highCut" );
+            print OUT $printString;
+            ( $printString, $total ) = printAllCount ( $base, type => "lowCut" );
+            print OUT $printString;
+            $printString = printAllPerc ( $base, $total, type => "lowCut" );
+            print OUT $printString;
         }
         print OUT "\n";
     }
 
     foreach my $seqID ( sort {$a cmp $b} ( keys %seqMut_stat ) ) {
-        print OUT printHeader ( $seqID );
+        print OUT printStatHeader ( $seqID );
         foreach my $base ( "A", "T", "G", "C" ) {
-            print OUT $base;
-            $total = 0;
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{$mut} ) { 
-                    $total += $seqMut_stat{$seqID}{$base}{$mut};
-                    print OUT "\t", $seqMut_stat{$seqID}{$base}{$mut}; 
-                }
-                else { print OUT "\t0"; }
-            }
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{$mut} ) { 
-                    if ( $base eq $mut ) { $percentage = "-" ; }
-                    else { $percentage = sprintf ( "%.5f", $seqMut_stat{$seqID}{$base}{$mut} / $total ); }
-                    print OUT "\t", $percentage; 
-                }
-                else { print OUT "\t0"; }
-            }
-
-            $total = 0;
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{lowCut}{$mut} ) { 
-                    $total += $seqMut_stat{$seqID}{$base}{lowCut}{$mut};
-                    print OUT "\t", $seqMut_stat{$seqID}{$base}{lowCut}{$mut}; 
-                }
-                else { print OUT "\t0"; }
-            }
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{lowCut}{$mut} ) { 
-                    if ( $base eq $mut ) { $percentage = "-" ; }
-                    else { $percentage = sprintf ( "%.5f", $seqMut_stat{$seqID}{$base}{lowCut}{$mut} / $total ); }
-                    print OUT "\t", $percentage; 
-                }
-                else { print OUT "\t0"; }
-            }
-
-            $total = 0;
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{highCut}{$mut} ) { 
-                    $total += $seqMut_stat{$seqID}{$base}{highCut}{$mut};
-                    print OUT "\t", $seqMut_stat{$seqID}{$base}{highCut}{$mut}; 
-                }
-                else { print OUT "\t0"; }
-            }
-            foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
-                if ( defined $seqMut_stat{$seqID}{$base}{highCut}{$mut} ) { 
-                    if ( $base eq $mut ) { $percentage = "-" ; }
-                    else { $percentage = sprintf ( "%.5f", $seqMut_stat{$seqID}{$base}{highCut}{$mut} / $total ); }
-                    print OUT "\t", $percentage; 
-                }
-                else { print OUT "\t0"; }
+            ( $printString, $total ) = printSeqCount ( $seqID, $base );
+            print OUT $base, $printString;
+            $printString = printSeqPerc ( $seqID, $base, $total );
+            print OUT $printString;
+            if ( defined $parameters{icSHAPE} ) {
+                ( $printString, $total ) = printSeqCount ( $seqID, $base, type => "highCut" );
+                print OUT $printString;
+                $printString = printSeqPerc ( $seqID, $base, $total, type => "highCut" );
+                print OUT $printString;
+                ( $printString, $total ) = printSeqCount ( $seqID, $base, type => "lowCut" );
+                print OUT $printString;
+                $printString = printSeqPerc ( $seqID, $base, $total, type => "lowCut" );
+                print OUT $printString;
             }
             print OUT "\n";
         }
@@ -426,7 +383,7 @@ sub outputMutStat
     1;
 }
 
-sub printHeader
+sub printStatHeader
 {
     my $label = shift;
 
@@ -441,6 +398,125 @@ sub printHeader
 
     return $string;
 }
+
+sub printAllCount
+{
+    my $base = shift;
+    my %parameters = @_;
+
+    my $string = "";
+    my $total = 0;
+    if ( defined $parameters{type} ) {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $allMut_stat{$base}{$parameters{type}}{$mut} ) {
+                $total += $allMut_stat{$base}{$parameters{type}}{$mut};
+                $string .= "\t" . $allMut_stat{$base}{$parameters{type}}{$mut}; 
+            }
+            else { $string .="\t0"; }
+        }
+    }
+    else {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $allMut_stat{$base}{$mut} ) {
+                $total += $allMut_stat{$base}{$mut};
+                $string .= "\t" . $allMut_stat{$base}{$mut}; 
+            }
+            else { $string .="\t0"; }
+        }
+    }
+
+    return ( $string, $total );
+}
+
+sub printSeqCount
+{
+    my $seqID = shift;
+    my $base = shift;
+    my %parameters = @_;
+
+    my $string = "";
+    my $total = 0;
+    if ( defined $parameters{type} ) {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $seqMut_stat{$seqID}{$base}{$parameters{type}}{$mut} ) {
+                $total += $seqMut_stat{$seqID}{$base}{$parameters{type}}{$mut};
+                $string .= "\t" . $seqMut_stat{$seqID}{$base}{$parameters{type}}{$mut}; 
+            }
+            else { $string .="\t0"; }
+        }
+    }
+    else {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $seqMut_stat{$seqID}{$base}{$mut} ) { 
+                $total += $seqMut_stat{$seqID}{$base}{$mut};
+                $string .= "\t" . $seqMut_stat{$seqID}{$base}{$mut}; 
+            }
+            else { $string .="\t0"; }
+        }
+    }
+
+    return ( $string, $total );
+}
+
+sub printAllPerc
+{
+    my $base = shift; my $total = shift;
+    my %parameters = @_;
+
+    my $string = "";
+    my $percentage = "-";
+    if ( defined $parameters{type} ) {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $allMut_stat{$base}{$parameters{type}}{$mut} ) { 
+                if ( $base ne $mut )  { $percentage = sprintf ( "%.4f", $allMut_stat{$base}{$parameters{type}}{$mut} / $total ); }
+                $string .= "\t". $percentage; 
+            }
+            else { $string .= "\t0"; }
+        }
+    }
+    else {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $allMut_stat{$base}{$mut} ) { 
+                if ( $base ne $mut )  { $percentage = sprintf ( "%.4f", $allMut_stat{$base}{$mut} / $total ); }
+                $string .= "\t". $percentage; 
+            }
+            else { $string .= "\t0"; }
+        }
+    }
+
+    return $string;
+}
+
+sub printSeqPerc
+{
+    my $seqID = shift; my $base = shift; my $total = shift;
+    my %parameters = @_;
+
+    my $string = "";
+    my $percentage = "-";
+    if ( defined $parameters{type} ) {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $seqMut_stat{$seqID}{$base}{$parameters{type}}{$mut} ) { 
+                if ( $base ne $mut )  { $percentage = sprintf ( "%.4f", $seqMut_stat{$seqID}{$base}{$parameters{type}}{$mut} / $total ); }
+                $string .= "\t". $percentage; 
+            }
+            else { $string .= "\t0"; }
+        }
+    }
+    else {
+        foreach my $mut ( "A", "T", "G", "C", "deletion" ) {
+            if ( defined $seqMut_stat{$seqID}{$base}{$mut} ) { 
+                if ( $base ne $mut )  { $percentage = sprintf ( "%.4f", $seqMut_stat{$seqID}{$base}{$mut} / $total ); }
+                $string .= "\t". $percentage; 
+            }
+            else { $string .= "\t0"; }
+        }
+    }
+
+    return $string;
+}
+
+
 
 sub readIcSHAPE
 {
@@ -556,7 +632,7 @@ sub _parseCigar
     if ( $parameters{getLargestM} ) {
         my $largestM = 0;
         for ( my $idx = 0; $idx < scalar ( @match ); $idx++ ) 
-            { if ( $match[$idx] eq "M" ) { if ( $matchSize[$idx] > $largestM ) { $largestM = $matchSize[$idx]; } } }
+        { if ( $match[$idx] eq "M" ) { if ( $matchSize[$idx] > $largestM ) { $largestM = $matchSize[$idx]; } } }
 
         return $largestM;
     }
