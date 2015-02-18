@@ -16,6 +16,8 @@ my $icSHAPE = "/home/qczhang/shape-seq/new/analysis/all.polya/LIB_NAI-LIB_DMSO.P
 
 sub main
 {
+    &init ();
+
     my $samFileList = shift;
     my $mutFile = shift;
     my %parameters = @_;
@@ -33,6 +35,16 @@ sub main
     &mutStatistics ( \%seq, \%seq_icSHAPE, \%seq_mut, \%seqMut_stat, \%allMut_stat, lowCut => 0.05, highCut => 0.4 );
 
     &outputMutStat ( \%seqMut_stat, \%allMut_stat, $mutFile );
+}
+
+    if ( not $inputSam ) { die "Usage: $0 input_sam output_stat fasta shape\n"; }
+
+sub init
+{
+    if ( not $inputSam ) { die "Usage: $0 input_sam output_stat fasta shape\n"; }
+    if ( ( not defined $outputMut ) or ( $outputMut eq "NULL" ) ) {  $outputMut = "output.stat";  }
+    if ( ( not defined $refSeq ) or ( $refSeq eq "NULL" ) ) { $refSeq = "/home/qczhang/database/ensembl/current/mouse/gtf/transcriptome.fa"; }
+    if ( ( not defined $icSHAPE ) or ( $refSeq eq "NULL" ) ) { $icSHAPE = "/home/qczhang/shape-seq/new/analysis/all.polya/LIB_NAI-LIB_DMSO.PolyA.invitro.valid.enrich"; }
 }
 
 sub readSam
@@ -81,8 +93,9 @@ sub parseMut
     my $ref_seq = shift; my $ref_mut = shift;
     my $seqID = shift; my $pos = shift; my $cigar = shift; my $readSeq = shift; my $md = shift;
 
-    my @match = split ( /[0-9]+/, $cigar );             # CIGAR: \*|([0-9]+[MIDNSHPX=])+
-    my @matchSize = split ( /[MIDNSHPX=]/, $cigar );
+    my ( $ref_match, $ref_matchSize ) = _parseCigar ( $cigar );
+    my ( $ref_op, $ref_opSize ) = _parseMD ( $md );
+
     my @op = split ( /[0-9]+/, $md );                   # MD: [0-9]+(([A-Z]|\^[A-Z]+)[0-9]+)*
     my @opsize = split ( /[A-Z^]+/, $md );
     if ( $_debug ) {
@@ -687,3 +700,106 @@ sub _printString
 
     1;
 }
+
+sub _parseCigar
+{
+    my $cigar = shift;
+    my %parameters = @_;
+
+    my @match = split ( /[0-9]+/, $cigar ); shift @match; # CIGAR: \*|([0-9]+[MIDNSHPX=])+
+    my @matchSize = split ( /[MIDNSHPX=]/, $cigar );
+
+    if ( $_debug ) {
+        print STDERR "CIGAR\t", $cigar, "\nmatchOper";
+        _printArray ( \@match );
+        print STDERR "\nmatchSize";
+        _printArray ( \@matchSize );
+        print STDERR "\n";
+    }
+
+    if ( $parameters{getLargestM} ) {
+        my $largestM = 0;
+        for ( my $idx = 0; $idx < scalar ( @match ); $idx++ ) {
+            if ( $match[$idx] eq "M" ) {
+                if ( $matchSize[$idx] > $largestM ) {
+                    $largestM = $matchSize[$idx];
+                }
+            }
+        }
+
+        return $largestM;
+    }
+    if ( $parameters{getLeadingS} ) {
+        if ( $match[0] ne "S" ) {
+            print STDERR "Warning! unexpected CIGAR string: $cigar!\n";
+            return 0;
+        }
+        else { return $matchSize[0]; }
+    }
+    elsif ( $parameters{getMatchLen} ) {
+    }
+    else {
+        return ( \@match, \@matchSize );
+    }
+
+    1;
+}
+
+
+sub _parseCigar
+{
+    my $cigar = shift;
+    my %parameters = @_;
+
+    my @match = split ( /[0-9]+/, $cigar ); shift @match; # CIGAR: \*|([0-9]+[MIDNSHPX=])+
+    my @matchSize = split ( /[MIDNSHPX=]/, $cigar );
+
+    if ( $_debug ) {
+        print STDERR "CIGAR\t", $cigar, "\nmatchOper";
+        _printArray ( \@match );
+        print STDERR "\nmatchSize";
+        _printArray ( \@matchSize );
+        print STDERR "\n";
+    }
+
+    if ( $parameters{getLargestM} ) {
+        my $largestM = 0;
+        for ( my $idx = 0; $idx < scalar ( @match ); $idx++ ) {
+            if ( $match[$idx] eq "M" ) {
+                if ( $matchSize[$idx] > $largestM ) {
+                    $largestM = $matchSize[$idx];
+                }
+            }
+        }
+
+        return $largestM;
+    }
+    if ( $parameters{getLeadingS} ) {
+        if ( $match[0] ne "S" ) {
+            print STDERR "Warning! unexpected CIGAR string: $cigar!\n";
+            return 0;
+        }
+        else { return $matchSize[0]; }
+    }
+    elsif ( $parameters{getMatchLen} ) {
+    }
+    else {
+        return ( \@match, \@matchSize );
+    }
+
+    1;
+}
+
+sub _printArray
+{
+    my $ref_array = shift;
+
+    for ( my $idx = 0; $idx < scalar ( @{$ref_array} ); $idx++ ) {
+        if ( not defined $ref_array->[$idx] ) { print STDERR "\tnotDefined"; }
+        elsif ( $ref_array->[$idx] eq "" ) { print STDERR "\tblank"; }
+        else { print STDERR "\t", $ref_array->[$idx]; }
+    }
+
+    1;
+}
+
