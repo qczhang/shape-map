@@ -12,7 +12,7 @@ my $outputMut = shift;
 my $fasta = shift;
 my $icSHAPE = shift;
 
-my %seq = (); 
+my %seq_fasta = (); 
 my %seq_icSHAPE = ();
 my %seq_mut = ();
 my %seqMut_stat = (); 
@@ -29,13 +29,15 @@ sub main
     my %parameters = @_;
 
     &readFasta ( $parameters{fasta}, simple => 1 );
-    &readIcSHAPE ( $parameters{icSHAPE}, );
+    &readIcSHAPE ( $parameters{icSHAPE}, ) if ( defined $parameters{icSHAPE} );
 
     my @samFiles = split ( /:/, $samFileList );
     foreach my $samFile ( @samFiles ) { &readSam ( $samFile ); }
-    exit;
+    print Dumper \%seq_mut;
 
-    &mutStatistics ( lowCut => 0.05, highCut => 0.4 );
+    &mutStatistics ( icSHAPE => $icSHAPE, lowCut => 0.05, highCut => 0.4 );
+    print Dumper \%seq_mut;
+    print Dumper \%seqMut_stat;
 
     &outputMutStat ( $mutFile );
 }
@@ -97,7 +99,6 @@ sub parseMut
 
     my ( $headSoftClip, $ref_insertions, $ref_insertionSize ) = collectAlignInfoCIGAR ( $seqID, $pos, $cigar, $readSeq, $ref_match, $ref_matchSize );
     collectAlignInfoMD ( $seqID, $pos, $readSeq, $headSoftClip, $ref_op, $ref_opSize, $ref_insertions, $ref_insertionSize );
-    print Dumper \%seq_mut;
 
     1;
 }
@@ -244,123 +245,56 @@ sub mutStatistics
     my %parameters = @_;
 
     foreach my $seqID ( keys %seq_mut ) {
-        if ( not defined $seq{$seqID} ) {
-            print STDERR "ERROR! Sequence of $seqID not found. ...skipped\n";
-            next;
-        }
+        if ( not defined $seq_fasta{$seqID} ) { print STDERR "ERROR! Sequence of $seqID not found. ...skipped\n"; next; }
 
-        my $seq = uc ( $seq{$seqID} );
-        for ( my $idx = 0; $idx < length ( $seq ); $idx++ ) {
-            my $base = substr ( $seq, $idx, 1 );
+        my $fasta = uc ( $seq_fasta{$seqID} );
+        for ( my $idx = 0; $idx < length ( $fasta ); $idx++ ) {
+            my $base = substr ( $fasta, $idx, 1 );
             my $icSHAPE = ( defined $seq_icSHAPE{$seqID} ) ? $seq_icSHAPE{$seqID}[$idx] : "NULL"; 
-            if ( defined $seq_mut{$seqID}{same}[$idx] ) {
-                if ( not defined $seqMut_stat{$seqID}{$base}{$base} )  { $seqMut_stat{$seqID}{$base}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                else  { $seqMut_stat{$seqID}{$base}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-                if ( not defined $allMut_stat{$base}{$base} )  { $allMut_stat{$base}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                else  { $allMut_stat{$base}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-
-                if ( $icSHAPE ne "NULL" ) {
-                    if ( $icSHAPE < $parameters{lowCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{$base} )  { $seqMut_stat{$seqID}{$base}{lowCut}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                        else  { $seqMut_stat{$seqID}{$base}{lowCut}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-                        if ( not defined $allMut_stat{$base}{lowCut}{$base} )  { $allMut_stat{$base}{lowCut}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                        else  { $allMut_stat{$base}{lowCut}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-                    }
-                    elsif ( $icSHAPE > $parameters{highCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{$base} )  { $seqMut_stat{$seqID}{$base}{highCut}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                        else  { $seqMut_stat{$seqID}{$base}{highCut}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-                        if ( not defined $allMut_stat{$base}{highCut}{$base} )  { $allMut_stat{$base}{highCut}{$base} = $seq_mut{$seqID}{same}[$idx]; }
-                        else  { $allMut_stat{$base}{highCut}{$base} += $seq_mut{$seqID}{same}[$idx]; }
-                    }
-                }
-            }
+            if ( defined $seq_mut{$seqID}{same}[$idx] ) 
+                {  updateSeqMut ( $seqID, $base, $base, $seq_mut{$seqID}{same}[$idx], $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} ); }
             if ( defined $seq_mut{$seqID}{deletion}[$idx] ) {
                 my $insD = () = $seq_mut{$seqID}{deletion}[$idx] =~ /;/gi; $insD++;
-
-                if ( not defined $seqMut_stat{$seqID}{$base}{deletion} )  { $seqMut_stat{$seqID}{$base}{deletion} = $insD; }
-                else { $seqMut_stat{$seqID}{$base}{deletion} += $insD; }
-                if ( not defined $allMut_stat{$base}{deletion} )  { $allMut_stat{$base}{deletion} = $insD; }
-                else { $allMut_stat{$base}{deletion} += $insD; }
-                if ( $icSHAPE ne "NULL" ) {
-                    if ( $icSHAPE < $parameters{lowCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{deletion} )  { $seqMut_stat{$seqID}{$base}{lowCut}{deletion} = $insD; }
-                        else { $seqMut_stat{$seqID}{$base}{lowCut}{deletion} += $insD; }
-                        if ( not defined $allMut_stat{$base}{lowCut}{deletion} )  { $allMut_stat{$base}{lowCut}{deletion} = $insD; }
-                        else { $allMut_stat{$base}{lowCut}{deletion} += $insD; }
-                    }
-                    elsif ( $icSHAPE > $parameters{highCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{deletion} )  { $seqMut_stat{$seqID}{$base}{highCut}{deletion} = $insD; }
-                        else { $seqMut_stat{$seqID}{$base}{highCut}{deletion} += $insD; }
-                        if ( not defined $allMut_stat{$base}{highCut}{deletion} )  { $allMut_stat{$base}{highCut}{deletion} = $insD; }
-                        else { $allMut_stat{$base}{highCut}{deletion} += $insD; }
-                    }
-                }
+                updateSeqMut ( $seqID, $base, "deletion", $insD, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
             }
+
             if ( defined $seq_mut{$seqID}{mutation}[$idx] ) {
                 my $insA = () = $seq_mut{$seqID}{mutation}[$idx] =~ /A/gi;
                 my $insT = () = $seq_mut{$seqID}{mutation}[$idx] =~ /T/gi;
                 my $insG = () = $seq_mut{$seqID}{mutation}[$idx] =~ /G/gi;
                 my $insC = () = $seq_mut{$seqID}{mutation}[$idx] =~ /C/gi;
 
-                if ( not defined $seqMut_stat{$seqID}{$base}{A} )  { $seqMut_stat{$seqID}{$base}{A} = $insA; }
-                else { $seqMut_stat{$seqID}{$base}{A} += $insA; }
-                if ( not defined $seqMut_stat{$seqID}{$base}{T} )  { $seqMut_stat{$seqID}{$base}{T} = $insT; }
-                else { $seqMut_stat{$seqID}{$base}{T} += $insT; }
-                if ( not defined $seqMut_stat{$seqID}{$base}{G} )  { $seqMut_stat{$seqID}{$base}{G} = $insG; }
-                else { $seqMut_stat{$seqID}{$base}{G} += $insG; }
-                if ( not defined $seqMut_stat{$seqID}{$base}{C} )  { $seqMut_stat{$seqID}{$base}{C} = $insC; }
-                else { $seqMut_stat{$seqID}{$base}{C} += $insC; }
-
-                if ( not defined $allMut_stat{$base}{A} )  { $allMut_stat{$base}{A} = $insA; }
-                else { $allMut_stat{$base}{A} += $insA; }
-                if ( not defined $allMut_stat{$base}{T} )  { $allMut_stat{$base}{T} = $insT; }
-                else { $allMut_stat{$base}{T} += $insT; }
-                if ( not defined $allMut_stat{$base}{G} )  { $allMut_stat{$base}{G} = $insG; }
-                else { $allMut_stat{$base}{G} += $insG; }
-                if ( not defined $allMut_stat{$base}{C} )  { $allMut_stat{$base}{C} = $insC; }
-                else { $allMut_stat{$base}{C} += $insC; }
-
-                if ( $icSHAPE ne "NULL" ) {
-                    if ( $icSHAPE < $parameters{lowCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{A} )  { $seqMut_stat{$seqID}{$base}{lowCut}{A} = $insA; }
-                        else { $seqMut_stat{$seqID}{$base}{lowCut}{A} += $insA; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{T} )  { $seqMut_stat{$seqID}{$base}{lowCut}{T} = $insT; }
-                        else { $seqMut_stat{$seqID}{$base}{lowCut}{T} += $insT; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{G} )  { $seqMut_stat{$seqID}{$base}{lowCut}{G} = $insG; }
-                        else { $seqMut_stat{$seqID}{$base}{lowCut}{G} += $insG; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{lowCut}{C} )  { $seqMut_stat{$seqID}{$base}{lowCut}{C} = $insC; }
-                        else { $seqMut_stat{$seqID}{$base}{lowCut}{C} += $insC; }
-
-                        if ( not defined $allMut_stat{$base}{lowCut}{A} )  { $allMut_stat{$base}{lowCut}{A} = $insA; }
-                        else { $allMut_stat{$base}{lowCut}{A} += $insA; }
-                        if ( not defined $allMut_stat{$base}{lowCut}{T} )  { $allMut_stat{$base}{lowCut}{T} = $insT; }
-                        else { $allMut_stat{$base}{lowCut}{T} += $insT; }
-                        if ( not defined $allMut_stat{$base}{lowCut}{G} )  { $allMut_stat{$base}{lowCut}{G} = $insG; }
-                        else { $allMut_stat{$base}{lowCut}{G} += $insG; }
-                        if ( not defined $allMut_stat{$base}{lowCut}{C} )  { $allMut_stat{$base}{lowCut}{C} = $insC; }
-                        else { $allMut_stat{$base}{lowCut}{C} += $insC; }
-                    }
-                    elsif ( $icSHAPE > $parameters{highCut} ) {
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{A} )  { $seqMut_stat{$seqID}{$base}{highCut}{A} = $insA; }
-                        else { $seqMut_stat{$seqID}{$base}{highCut}{A} += $insA; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{T} )  { $seqMut_stat{$seqID}{$base}{highCut}{T} = $insT; }
-                        else { $seqMut_stat{$seqID}{$base}{highCut}{T} += $insT; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{G} )  { $seqMut_stat{$seqID}{$base}{highCut}{G} = $insG; }
-                        else { $seqMut_stat{$seqID}{$base}{highCut}{G} += $insG; }
-                        if ( not defined $seqMut_stat{$seqID}{$base}{highCut}{C} )  { $seqMut_stat{$seqID}{$base}{highCut}{C} = $insC; }
-                        else { $seqMut_stat{$seqID}{$base}{highCut}{C} += $insC; }
-
-                        if ( not defined $allMut_stat{$base}{highCut}{A} )  { $allMut_stat{$base}{highCut}{A} = $insA; }
-                        else { $allMut_stat{$base}{highCut}{A} += $insA; }
-                        if ( not defined $allMut_stat{$base}{highCut}{T} )  { $allMut_stat{$base}{highCut}{T} = $insT; }
-                        else { $allMut_stat{$base}{highCut}{T} += $insT; }
-                        if ( not defined $allMut_stat{$base}{highCut}{G} )  { $allMut_stat{$base}{highCut}{G} = $insG; }
-                        else { $allMut_stat{$base}{highCut}{G} += $insG; }
-                        if ( not defined $allMut_stat{$base}{highCut}{C} )  { $allMut_stat{$base}{highCut}{C} = $insC; }
-                        else { $allMut_stat{$base}{highCut}{C} += $insC; }
-                    }
-                }
+                updateSeqMut ( $seqID, $base, "A", $insA, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
+                updateSeqMut ( $seqID, $base, "T", $insT, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
+                updateSeqMut ( $seqID, $base, "G", $insG, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
+                updateSeqMut ( $seqID, $base, "C", $insC, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
             }
+        }
+    }
+
+    1;
+}
+
+sub updateSeqMut
+{
+    my $seqID = shift; my $base = shift; my $mutType = shift; my $count = shift; my $icSHAPE = shift;
+    my %parameters = @_;
+
+    if ( not defined $seqMut_stat{$seqID}{$base}{$mutType} )  { $seqMut_stat{$seqID}{$base}{$mutType} = $count; }
+    else  { $seqMut_stat{$seqID}{$base}{$mutType} += $count; }
+    if ( not defined $allMut_stat{$base}{$mutType} )  { $allMut_stat{$base}{$mutType} = $count; }
+    else  { $allMut_stat{$base}{$mutType} += $count; }
+
+    if ( $icSHAPE ne "NULL" ) {
+        my $cut = 0;
+        if ( $icSHAPE > $parameters{highCut} ) { $cut = "highCut"; }
+        elsif ( $icSHAPE < $parameters{lowCut} ) { $cut = "lowCut"; }
+
+        if ( $cut ) {
+            if ( not defined $seqMut_stat{$seqID}{$base}{$cut}{$mutType} )  { $seqMut_stat{$seqID}{$base}{$cut}{$base} = $count; }
+            else  { $seqMut_stat{$seqID}{$base}{$cut}{$mutType} += $count; }
+            if ( not defined $allMut_stat{$base}{$cut}{$mutType} )  { $allMut_stat{$base}{$cut}{$mutType} = $count; }
+            else  { $allMut_stat{$base}{$cut}{$mutType} += $count; }
         }
     }
 
@@ -369,20 +303,12 @@ sub mutStatistics
 
 sub outputMutStat 
 {
-    my $ref_seqMutStat = shift;
-    my $ref_allMutStat = shift;
     my $outFile = shift;
     my %parameters = @_;
 
     my $total = 0; my $percentage = 0;
     open ( OUT, ">$outFile" );
-    foreach my $col ( "allBase", "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-    print OUT "\n";
+    print OUT printHeader ( "allBase" );
     foreach my $base ( "A", "T", "G", "C" ) {
         print OUT $base;
         $total = 0;
@@ -438,14 +364,8 @@ sub outputMutStat
         print OUT "\n";
     }
 
-    foreach my $seqID ( sort {$a cmp $b} ( keys %{$ref_seqMutStat} ) ) {
-        foreach my $col ( $seqID, "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        foreach my $col ( "A", "T", "G", "C", "deletion" ) {  print OUT $col, "\t";  }
-        print OUT "\n";
+    foreach my $seqID ( sort {$a cmp $b} ( keys %seqMut_stat ) ) {
+        print OUT printHeader ( $seqID );
         foreach my $base ( "A", "T", "G", "C" ) {
             print OUT $base;
             $total = 0;
@@ -501,8 +421,25 @@ sub outputMutStat
             print OUT "\n";
         }
     }
+    close OUT;
 
     1;
+}
+
+sub printHeader
+{
+    my $label = shift;
+
+    my $string = "";
+    foreach my $col ( $label, "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    foreach my $col ( "A", "T", "G", "C", "deletion" ) {  $string .= $col . "\t";  }
+    $string .= "\n";
+
+    return $string;
 }
 
 sub readIcSHAPE
@@ -542,7 +479,7 @@ sub readFasta
 
             $line = <FA>;
             chomp $line;
-            $seq{$id} = $line;
+            $seq_fasta{$id} = $line;
         }
     }
     close FA;
@@ -557,7 +494,7 @@ sub _localReAlignment
     my $match = 0;
     my $offset = 0;
     my $deletion = uc ( substr ( $op, 1 ) );
-    my $substr = uc ( substr ( $seq{$seqID}, $pos-length($deletion)-1, 3*length($deletion) ) );
+    my $substr = uc ( substr ( $seq_fasta{$seqID}, $pos-length($deletion)-1, 3*length($deletion) ) );
     my $result = index($substr, $deletion, $offset);
     while ($result != -1) {
         $match++;
