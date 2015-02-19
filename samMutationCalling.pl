@@ -3,7 +3,7 @@
 use strict;
 use warnings;
 
-my $_debug = 0;
+my $_debug = 1;
 
 use Data::Dumper;
 
@@ -171,9 +171,9 @@ sub collectAlignInfoMD
             if ( ( defined $ref_op->[1] ) and ( $ref_op->[1] ) and ( not $ref_opSize->[0] ) ) { $seq_mut{$seqID}{"same"}[$refPos-1]++; }
             else {
                 my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[0] );
-                print "multiple matching? - $matchInLocal\n" if ( $_debug );
+                print STDERR "multiple matching? - $matchInLocal\n" if ( $_debug );
                 if ( $matchInLocal == 1 ) {
-                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
+                    print STDERR "\tmatch only once, no realignment needed.\n" if ( $_debug );
                     $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[0] );
                     ## you want to label the deletion even at the last base of deleted fragment
                 }
@@ -203,9 +203,9 @@ sub collectAlignInfoMD
             ## first check whether there is a following mutational event and whether it is immediately after this one. if true, skip this one
             else {
                 my $matchInLocal = _localReAlignment ( $seqID, $refPos-$delLen, $ref_op->[$idx] );
-                print "multiple matching? - $matchInLocal\n" if ( $_debug );
+                print STDERR "multiple matching? - $matchInLocal\n" if ( $_debug );
                 if ( $matchInLocal == 1 ) {
-                    print "\tmatch only once, no realignment needed.\n" if ( $_debug );
+                    print STDERR "\tmatch only once, no realignment needed.\n" if ( $_debug );
                     $seq_mut{$seqID}{"deletion"}[$refPos-1] = _append ( $seq_mut{$seqID}{"deletion"}[$refPos-1], $ref_op->[$idx] );
                     ## you want to label the deletion even at the last base of deleted fragment
                 }
@@ -244,7 +244,7 @@ sub statAndPrint
     my %parameters = @_;
 
     open ( OUT, ">$outFile" );
-    print OUT "seqID\tindex\tbase\ticSHAPE\tsame\tfreqA\tfreqT\tfreqG\tfreqC\tfreqDel\ttotal\tprobSame\tprobA\tprobT\tprobG\tprobC\tprobDel\n";
+    print OUT "seqID\tindex\tbase\ticSHAPE\tmutFqA\tmutFqT\tmutFqG\tmutFqC\tmutFqDel\tmutFqTotal\tnoMut\ttotal\tmutPbA\tmutPbT\tmutPbG\tmutPbC\tmutPbDel\tmutPbTotal\n";
     foreach my $seqID ( sort {$a cmp $b} ( keys %seq_mut ) ) {
         if ( not defined $seq_fasta{$seqID} ) { print STDERR "ERROR! Sequence of $seqID not found. ...skipped\n"; next; }
 
@@ -255,40 +255,37 @@ sub statAndPrint
             my $icSHAPE = ( defined $seq_icSHAPE{$seqID} ) ? $seq_icSHAPE{$seqID}[$idx] : "NULL"; 
             print OUT $seqID, "\t", $idx+1, "\t", $base, "\t", $icSHAPE;
 
-            my $total = 0;
-            my $same = 0;
-            if ( defined $seq_mut{$seqID}{same}[$idx] ) {  
-                $same = $seq_mut{$seqID}{same}[$idx];
-                $total += $same;
-                updateSeqMut ( $seqID, $base, $base, $same, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} ); 
-            }
-            print OUT "\t", $same;
-
+            my $total_mut = 0; my $total = 0;
             my $insA = 0; my $insT = 0; my $insG = 0; my $insC = 0;
             if ( defined $seq_mut{$seqID}{mutation}[$idx] ) {
                 $insA = () = $seq_mut{$seqID}{mutation}[$idx] =~ /A/gi;
                 $insT = () = $seq_mut{$seqID}{mutation}[$idx] =~ /T/gi;
                 $insG = () = $seq_mut{$seqID}{mutation}[$idx] =~ /G/gi;
                 $insC = () = $seq_mut{$seqID}{mutation}[$idx] =~ /C/gi;
-                $total += $insA + $insT + $insG + $insC;
                 updateSeqMut ( $seqID, $base, "A", $insA, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "T", $insT, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "G", $insG, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
                 updateSeqMut ( $seqID, $base, "C", $insC, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
             }
-            print OUT "\t", $insA, "\t", $insT, "\t", $insG, "\t", $insC;
 
             my $insD = 0;
             if ( defined $seq_mut{$seqID}{deletion}[$idx] ) {
                 $insD = () = $seq_mut{$seqID}{deletion}[$idx] =~ /;/gi; $insD++;
-                $total += $insD;
                 updateSeqMut ( $seqID, $base, "deletion", $insD, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} );
             }
-            print OUT "\t", $insD;
 
+            my $same = 0; 
+            if ( defined $seq_mut{$seqID}{same}[$idx] ) {  
+                $same = $seq_mut{$seqID}{same}[$idx];
+                updateSeqMut ( $seqID, $base, $base, $same, $icSHAPE, lowCut => $parameters{lowCut}, highCut => $parameters{highCut} ); 
+            }
+
+            $total_mut += $insA + $insT + $insG + $insC + $insD;
+            $total = $same + $total_mut;
+            print OUT "\t", $insA, "\t", $insT, "\t", $insG, "\t", $insC, "\t", $insD, "\t", $total_mut, "\t", $same, "\t", $total;
             if ( $total ) 
-                {  print OUT "\t$total\t", sprintf ( "%.4f", $same/$total ), "\t", sprintf ( "%.4f", $insA/$total ), "\t", sprintf ( "%.4f", $insT/$total ), "\t", sprintf ( "%.4f", $insG/$total ), "\t", sprintf ( "%.4f", $insC/$total ), "\t", sprintf ( "%.4f", $insD/$total ), "\n"; }
-            else { print OUT "\t$total\t-\t-\t-\t-\t-\t-\n"; }
+                {  print OUT "\t", sprintf ( "%.4f", $insA/$total ), "\t", sprintf ( "%.4f", $insT/$total ), "\t", sprintf ( "%.4f", $insG/$total ), "\t", sprintf ( "%.4f", $insC/$total ), "\t", sprintf ( "%.4f", $insD/$total ), "\t", sprintf ( "%.4f", $total_mut/$total ), "\n"; }
+            else { print OUT "\t-\t-\t-\t-\t-\t-\n"; }
         }
     }
     close OUT;
@@ -318,16 +315,6 @@ sub updateSeqMut
             else  { $allMut_stat{$base}{$cut}{$mutType} += $count; }
         }
     }
-
-    1;
-}
-
-
-sub outputMut 
-{
-    my $outFile = shift;
-    my %parameters = @_;
-
 
     1;
 }
